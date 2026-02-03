@@ -1,46 +1,51 @@
 import express from 'express'
-import { spawn } from 'node:child_process';
+import { 
+  convertVideo,
+  deleteProcessedVideo, 
+  deleteRawVideo, 
+  downloadRawVideo, 
+  setupDirectories, 
+  uploadProcessedVideo 
+} from './storage';
+
+setupDirectories();
 
 const app = express();
 app.use(express.json());
 
-app.post('/process-video', (req, res) => {
-  const inputFilePath = req.body.inputFilePath;
-  const outputFilePath = req.body.outputFilePath;
+app.post('/process-video', async (req, res) => {
   
-  if (!inputFilePath || !outputFilePath) {
-    console.log("InputFilePath or OutputFilePath not included!");
-    return res.status(400).send("InputFilePath or outputFilePath not included!");
+  let data;
+  try {
+    const message = Buffer.from(req.body.message.data, 'base64').toString('utf-8');
+    data = JSON.parse(message);
+  } catch (err) {
+    console.log(`/process-video : ${err}`);
+    res.status(500).send(`/process-video : ${err}`);
+  }
+  
+  let inputFileName = data.name;
+  let processedFileName = `processed-${inputFileName}`;
+
+  await downloadRawVideo(inputFileName);
+
+  try {
+    convertVideo(inputFileName, processedFileName);
+  } catch (err) {
+    console.log(`/process-video > convertVideo : ${err}`);
+    deleteRawVideo(inputFileName);
+    deleteProcessedVideo(processedFileName);
+    return res.status(500).send(`/process-video > convertVideo : ${err}`);
   }
 
-  const ffmpegArgs = [
-    "-i",
-    inputFilePath,
-    "-vf",
-    "scale=-2:360",
-    outputFilePath
-  ];
+  uploadProcessedVideo(processedFileName);
 
-  const ffmpegProcess = spawn('ffmpeg', ffmpegArgs);
-  let stderrOutput = '';
+  await Promise.all([
+    deleteRawVideo(inputFileName),
+    deleteProcessedVideo(processedFileName)
+  ]);
 
-  ffmpegProcess.stderr.on('data', (data) => {
-    stderrOutput += data.toString();
-  })
-
-  ffmpegProcess.stdin.write('y\n'); 
-  ffmpegProcess.stdin.end();
-
-  ffmpegProcess.on('close', (code) => {
-    console.log(`child process exited with code ${code}`);
-
-    if (code == 0) {
-      res.status(200).send("Successfull!")
-    } else {
-      console.error(`ffmpeg exited with code ${code}, Error: ${stderrOutput}`);
-      res.status(500).send(`ffmpeg exited with code ${code}, Error: ${stderrOutput}`);
-    }
-  });
+  res.status(200).send("OK!");
 });
 
 const port = process.env.port || 3000;
